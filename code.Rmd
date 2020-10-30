@@ -1,0 +1,807 @@
+---
+title: "FDA Project - Walmart Store Sales Forecasting"
+author: "17MIS1137 | 17MIS1194"
+output: 
+  prettydoc::html_pretty:
+    theme: cayman
+    highlight: github
+---
+# __INTRODUCTION__
+
+## Objectives
+* To perform exploratory analysis on the dataset
+* To build a time series model
+* To Predict the department-wide-sales for each store
+
+## Dataset description
+The Kaggle dataset contains historical sales data for 45 Walmart stores located in different regions. Each store contains a number of departments, and we have to
+predict the department-wide sales for each store.The datasets included information about : 
+
+* **train** dataset
+
+    + *Store* - the store number
+    + *Dept* - the department number
+    + *Date* - the week 
+    + *Weekly_Sales* - sales for the given department in the given store and department
+    + *IsHoliday* - whether the week was a special holiday week
+
+Additional data related to the store, department, and regional promotional activity for the given dates were available in the dataset *features*. The variables included in this dataset are shown below.
+
+* **features** dataset
+
+    + *Store* - the store number
+    + *Date* - the week 
+    + *Temperature*- average temperature in the region
+    + *Fuel Price* - cost of fuel in the region
+    + *MarkDown 1-5* - anonymised data related to promotional markdowns that Walmart was running
+    + *CPI* - consumer price index
+    + *Unemployment* - the unemployment rate
+    + *IsHoliday* - whether the week was a special holiday week
+     
+Anonymised information about the 45 stores, indicating the type and size of store, were also available in the dataset *stores*.  
+    
+* **stores** dataset
+
+    + *Store* - the store number
+    + *Type* - type of the store (A, B, C)
+    + *Size* - size of the store
+
+
+### Installing the packages and dependencies
+
+```{r message = FALSE, warning = FALSE}
+library(timeDate)
+library(randomForest)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(magrittr)
+library(fpp)
+library(rlist)
+library(tidyverse)
+```
+
+### Importing Dataset
+
+```{r}
+stores <- read.csv("./Dataset/stores.csv")
+features <- read.csv("./Dataset/features.csv")
+train <- read.csv("./Dataset/train.csv")
+```
+
+# _EXPLORING THE DATASET__
+```{r}
+str(stores)
+str(train)
+```
+
+### __Distribution of variables__
+```{r}
+par(mfrow=c(3,2))
+hist(train$Store, col = 'light pink', main = "Stores")
+hist(features$Temperature, col = 'light pink', main = "Temperature")
+hist(features$Fuel_Price, col = 'light pink', main = "Fuel Price")
+hist(features$CPI, col = 'light pink', main = "CPI")
+hist(features$Unemployment, col = 'light pink', main = "Unemployment")
+hist(stores$Size, col = 'light pink', main = "Store Size")
+
+```
+
+Temperature, Fuel Price and Unemployment are fairly normally distributed. Store Sizes have brackets on both ends indicating large number of large and small stores. The medium sized stores are very few in comparison in this dataset. We might need to do some transformation of this data
+
+
+```{r}
+#Merge store data with train data
+tdata <- merge(x=train,y=stores,all.x = TRUE)
+#merge features with train data
+train<-merge(x=tdata, y= features, all.x = TRUE)
+train_format <- data.frame(Store=factor(),Date=as.Date(character()),CPI = double(), Unemployment = double(), Weekly_Sales=double(),IsHoliday=logical(),Type=factor())
+```
+
+```{r}
+#sum of weekly sales of all dept
+sum_weekly_sales <- function(){
+  for(n in 1:45){
+    per_store <- train %>% filter(Store == n)
+    each_date <- unique(train$Date)
+    
+    for(dates in seq_along(each_date)){
+      curdate <- unique(train$Date)[[dates]]
+      dataDates <- per_store %>% filter(Date==curdate)
+      
+      net_sales <- unlist(sum(dataDates$Weekly_Sales))
+      nrow <- data.frame(Store=n,Date=curdate,Weekly_Sales=net_sales,CPI = dataDates$CPI[[1]], Unemployment = dataDates$Unemployment[[1]], IsHoliday=dataDates$IsHoliday[[1]],Type=dataDates$Type[[1]])
+      train_format <- rbind(train_format,nrow)
+      
+      
+    }
+  }
+  return(train_format)
+  
+}
+
+```
+
+
+### Sum of the weekly sales of all department-wide stores
+```{r}
+train_final <- sum_weekly_sales()
+head(train_final)
+```
+
+```{r}
+par(mfrow = c(1,2))
+hist(train_final$Weekly_Sales, col = 'light green', main = "Weekly Sales Original", xlab = "Weekly Sales")
+hist(log(train_final$Weekly_Sales), col = 'light green', main = "Weekly Sales Transformed", xlab ='log(Weekly Sales)')
+```
+# __ARIMA MODEL__
+
+ARIMA models aim to describe the autocorrelations in the data and are generally used to make forecasts rather than predicting sales in the past. The nature of the algorithm requires that the data are transformed into a time series format and that there are no missing observations (weeks). Thus, creating a train/test set for time-series problems becomes tricky because the time component has to be taken into account..
+
+```{r}
+#AUTO ARIMA
+train.Store1 <- train_final %>% filter(Store == 1)
+trainStore1.ts <- ts(train.Store1, frequency = 52, start = c(2010,5), end = c(2012,42))
+train.train1 <- window(trainStore1.ts, start = c(2010,5), end = c(2011,52))
+train.test1 <- window(trainStore1.ts, start = c(2012,1), end = c(2012,42))
+trainArima1 <- auto.arima(train.train1[,3], approximation = TRUE)
+trainArima1
+trainArimaForecast1 <- forecast(trainArima1, h = 42)
+plot(trainArimaForecast1, ylab = "Weekly Sales")
+train.test1[,3]
+accuracy(trainArimaForecast1,train.test1[,3]) 
+```
+
+```{r}
+#fit <- lm(Weekly_Sales ~.-Date-Type-CPI, data=train_final)
+#INITIAL ANALYSIS
+plot(decompose(trainStore1.ts[,3]))
+adf.test(trainStore1.ts[,3], k = 20)
+```
+### TRAINING ON STORE NUMBER 45 
+```{r}
+train.Store45 <- train_final %>% filter(Store == 45)
+trainStore45.ts <- ts(train.Store45, frequency = 52, start = c(2010,5), end = c(2012,42))
+train.train45 <- window(trainStore45.ts, start = c(2010,5), end = c(2011,52))
+train.test45 <- window(trainStore45.ts, start = c(2012,1), end = c(2012,42))
+trainArima45 <- auto.arima(train.train45[,3], approximation = TRUE)
+summary(trainArima45)
+trainArimaForecast45 <- forecast(trainArima45, h = 42)
+plot(trainArimaForecast45, ylab = "Weekly Sales")
+accuracy(trainArimaForecast45,train.test45[,3]) 
+```
+# __NNETAR MODEL__
+some neural network model idk
+
+```{r}
+#NNETAR
+train.Store1 <- train_final %>% filter(Store == 1)
+trainStore1.ts <- ts(train.Store1, frequency = 52, start = c(2010,5), end = c(2012,42))
+train.train1 <- window(trainStore1.ts, start = c(2010,5), end = c(2011,52))
+train.test1 <- window(trainStore1.ts, start = c(2012,1), end = c(2012,42))
+train1Net <- nnetar(train.train1[,3])
+train1Net
+train1Netfo <- forecast(train1Net, h = 42)
+plot(train1Netfo, ylab ="Weekly Sales")
+accuracy(train1Netfo,train.test1[,3])
+```
+
+```{r}
+#testing NNAR on store 45
+train.Store45 <- train_final %>% filter(Store == 45)
+trainStore45.ts <- ts(train.Store45, frequency = 52, start = c(2010,5), end = c(2012,42))
+train.train45 <- window(trainStore45.ts, start = c(2010,5), end = c(2011,52))
+train.test45 <- window(trainStore45.ts, start = c(2012,1), end = c(2012,42))
+train45Net <- nnetar(train.train45[,3])
+train45Net
+train45Netfo <- forecast(train45Net, h = 42)
+plot(train45Netfo)
+accuracy(train45Netfo,train.test1[,3])
+
+```
+# __TIME SERIES REGRESSION__
+```{r}
+#Time Series Regression
+train.Store1 <- train_final %>% filter(Store == 1)
+trainStore1.ts <- ts(train.Store1, frequency = 52, start = c(2010,5), end = c(2012,42))
+plot(decompose(trainStore1.ts[,3]))
+train.train1 <- window(trainStore1.ts, start = c(2010,5), end = c(2011,52))
+train.test1 <- window(trainStore1.ts, start = c(2012,1), end = c(2012,42))
+store1.fit <- tslm(train.train1[,3] ~ trend + season)
+summary(store1.fit)
+accuracy(store1.fit)
+trainTSLMfor1 <- forecast(store1.fit, h = 42)
+plot(trainTSLMfor1, ylab = "Weekly Sales")
+accuracy(trainTSLMfor1, train.test1[,3])
+```
+
+```{r}
+#Decompose for store 45
+train.Store45 <- train_final %>% filter(Store == 45)
+trainStore45.ts <- ts(train.Store45, frequency = 52, start = c(2010,5), end = c(2012,42))
+plot(decompose(trainStore45.ts[,3]))
+```
+```{r}
+#COmpare store 1 and store 45
+train.train45 <- window(trainStore45.ts, start = c(2010,5), end = c(2011,52))
+train.test45 <- window(trainStore45.ts, start = c(2012,1), end = c(2012,42))
+store45.fit <- tslm(train.train45[,3] ~ trend + season)
+summary(store45.fit)
+accuracy(store45.fit)
+trainTSLMfor45 <- forecast(store45.fit, h = 42)
+accuracy(trainTSLMfor45, train.test45[,3])
+plot(trainTSLMfor45, ylab = "Weekly Sales")
+ts.plot(trainStore1.ts,trainStore45.ts, gpars=list(xlab="year", ylab="Weekly Sales", col=c(3:4), lty = c(1,2)))
+legend("topright", c("Store 1 Data", "Store 45 Data"), cex = 0.85, lty = c(1,2), col = c("green", "blue"))
+```
+# FINAL TIME SERIES MODEL FOR PREDICTION 
+
+```{r}
+#FINAL MODEL PREDICTION
+dates <- seq(as.Date("2012-11-02"),as.Date("2013-11-01"),7)
+
+train.Store1 <- train_final %>% filter(Store == 1)
+trainStore1.ts <- ts(train.Store1, frequency = 52, start = c(2010,5), end = c(2012,42))
+store1.fit <- tslm(trainStore1.ts[,3] ~ trend + season)
+trainTSLMfor1 <- forecast(store1.fit, h = 53)
+df1 <- rep(1, len = 53)
+predict1 <- as.numeric(trainTSLMfor1$mean)
+nrow1 <- data.frame(Store=df1,Date=dates,Weekly_Sales=predict1)
+```
+
+
+```{r}
+train.Store2 <- train_final %>% filter(Store == 2)
+trainStore2.ts <- ts(train.Store2, frequency = 52, start = c(2010,5), end = c(2012,42))
+store2.fit <- tslm(trainStore2.ts[,3] ~ trend + season)
+trainTSLMfor2 <- forecast(store2.fit, h = 53)
+trainTSLMfor2
+df2 <- rep(2, len = 53)
+predict2 <- as.numeric(trainTSLMfor2$mean)
+nrow2 <- data.frame(Store=df2,Date=dates,Weekly_Sales=predict2)
+```
+
+
+```{r}
+train.Store3 <- train_final %>% filter(Store == 3)
+trainStore3.ts <- ts(train.Store3, frequency = 52, start = c(2010,5), end = c(2012,42))
+store3.fit <- tslm(trainStore3.ts[,3] ~ trend + season)
+trainTSLMfor3 <- forecast(store3.fit, h = 53)
+trainTSLMfor3
+df3 <- rep(3, len = 53)
+predict3 <- as.numeric(trainTSLMfor3$mean)
+nrow3 <- data.frame(Store=df3,Date=dates,Weekly_Sales=predict3)
+```
+
+
+```{r}
+train.Store4 <- train_final %>% filter(Store == 4)
+trainStore4.ts <- ts(train.Store4, frequency = 52, start = c(2010,5), end = c(2012,42))
+store4.fit <- tslm(trainStore4.ts[,3] ~ trend + season)
+trainTSLMfor4 <- forecast(store4.fit, h = 53)
+trainTSLMfor4
+df4 <- rep(4, len = 53)
+predict4 <- as.numeric(trainTSLMfor4$mean)
+nrow4 <- data.frame(Store=df4,Date=dates,Weekly_Sales=predict4)
+```
+
+
+```{r}
+train.Store5 <- train_final %>% filter(Store == 5)
+trainStore5.ts <- ts(train.Store5, frequency = 52, start = c(2010,5), end = c(2012,42))
+store5.fit <- tslm(trainStore5.ts[,3] ~ trend + season)
+trainTSLMfor5 <- forecast(store5.fit, h = 53)
+trainTSLMfor5
+df5 <- rep(5, len = 53)
+predict5 <- as.numeric(trainTSLMfor5$mean)
+nrow5 <- data.frame(Store=df5,Date=dates,Weekly_Sales=predict5)
+```
+
+
+```{r}
+train.Store6 <- train_final %>% filter(Store == 6)
+trainStore6.ts <- ts(train.Store6, frequency = 52, start = c(2010,5), end = c(2012,42))
+store6.fit <- tslm(trainStore6.ts[,3] ~ trend + season)
+trainTSLMfor6 <- forecast(store6.fit, h = 53)
+trainTSLMfor6
+df6 <- rep(6, len = 53)
+predict6 <- as.numeric(trainTSLMfor6$mean)
+nrow6 <- data.frame(Store=df6,Date=dates,Weekly_Sales=predict6)
+```
+
+
+```{r}
+train.Store7 <- train_final %>% filter(Store == 7)
+trainStore7.ts <- ts(train.Store7, frequency = 52, start = c(2010,5), end = c(2012,42))
+store7.fit <- tslm(trainStore7.ts[,3] ~ trend + season)
+trainTSLMfor7 <- forecast(store7.fit, h = 53)
+trainTSLMfor7
+df7 <- rep(7, len = 53)
+predict7 <- as.numeric(trainTSLMfor7$mean)
+nrow7 <- data.frame(Store=df7,Date=dates,Weekly_Sales=predict7)
+```
+
+
+```{r}
+train.Store8 <- train_final %>% filter(Store == 8)
+trainStore8.ts <- ts(train.Store8, frequency = 52, start = c(2010,5), end = c(2012,42))
+store8.fit <- tslm(trainStore8.ts[,3] ~ trend + season)
+trainTSLMfor8 <- forecast(store8.fit, h = 53)
+trainTSLMfor8
+df8 <- rep(8, len = 53)
+predict8 <- as.numeric(trainTSLMfor8$mean)
+nrow8 <- data.frame(Store=df8,Date=dates,Weekly_Sales=predict8)
+```
+
+
+```{r}
+train.Store9 <- train_final %>% filter(Store == 9)
+trainStore9.ts <- ts(train.Store9, frequency = 52, start = c(2010,5), end = c(2012,42))
+store9.fit <- tslm(trainStore9.ts[,3] ~ trend + season)
+trainTSLMfor9 <- forecast(store9.fit, h = 53)
+trainTSLMfor9
+df9 <- rep(9, len = 53)
+predict9 <- as.numeric(trainTSLMfor9$mean)
+nrow9 <- data.frame(Store=df9,Date=dates,Weekly_Sales=predict9)
+```
+
+
+```{r}
+train.Store10 <- train_final %>% filter(Store == 10)
+trainStore10.ts <- ts(train.Store10, frequency = 52, start = c(2010,5), end = c(2012,42))
+store10.fit <- tslm(trainStore10.ts[,3] ~ trend + season)
+trainTSLMfor10 <- forecast(store10.fit, h = 53)
+trainTSLMfor10
+df10 <- rep(10, len = 53)
+predict10 <- as.numeric(trainTSLMfor10$mean)
+nrow10 <- data.frame(Store=df10,Date=dates,Weekly_Sales=predict10)
+```
+
+
+```{r}
+train.Store11 <- train_final %>% filter(Store == 11)
+trainStore11.ts <- ts(train.Store11, frequency = 52, start = c(2010,5), end = c(2012,42))
+store11.fit <- tslm(trainStore11.ts[,3] ~ trend + season)
+trainTSLMfor11 <- forecast(store11.fit, h = 53)
+trainTSLMfor11
+df11 <- rep(11, len = 53)
+predict11 <- as.numeric(trainTSLMfor11$mean)
+nrow11 <- data.frame(Store=df11,Date=dates,Weekly_Sales=predict11)
+```
+
+
+```{r}
+train.Store12 <- train_final %>% filter(Store == 12)
+trainStore12.ts <- ts(train.Store12, frequency = 52, start = c(2010,5), end = c(2012,42))
+store12.fit <- tslm(trainStore12.ts[,3] ~ trend + season)
+trainTSLMfor12 <- forecast(store12.fit, h = 53)
+trainTSLMfor12
+df12 <- rep(12, len = 53)
+predict12 <- as.numeric(trainTSLMfor12$mean)
+nrow12 <- data.frame(Store=df12,Date=dates,Weekly_Sales=predict12)
+```
+
+
+```{r}
+train.Store13 <- train_final %>% filter(Store == 13)
+trainStore13.ts <- ts(train.Store13, frequency = 52, start = c(2010,5), end = c(2012,42))
+store13.fit <- tslm(trainStore13.ts[,3] ~ trend + season)
+trainTSLMfor13 <- forecast(store13.fit, h = 53)
+trainTSLMfor13
+df13 <- rep(13, len = 53)
+predict13 <- as.numeric(trainTSLMfor13$mean)
+nrow13 <- data.frame(Store=df13,Date=dates,Weekly_Sales=predict13)
+```
+
+
+```{r}
+train.Store14 <- train_final %>% filter(Store == 14)
+trainStore14.ts <- ts(train.Store14, frequency = 52, start = c(2010,5), end = c(2012,42))
+store14.fit <- tslm(trainStore14.ts[,3] ~ trend + season)
+trainTSLMfor14 <- forecast(store14.fit, h = 53)
+trainTSLMfor14
+df14 <- rep(14, len = 53)
+predict14 <- as.numeric(trainTSLMfor14$mean)
+nrow14 <- data.frame(Store=df14,Date=dates,Weekly_Sales=predict14)
+```
+
+
+```{r}
+train.Store15 <- train_final %>% filter(Store == 15)
+trainStore15.ts <- ts(train.Store15, frequency = 52, start = c(2010,5), end = c(2012,42))
+store15.fit <- tslm(trainStore15.ts[,3] ~ trend + season)
+trainTSLMfor15 <- forecast(store15.fit, h = 53)
+trainTSLMfor15
+df15 <- rep(15, len = 53)
+predict15 <- as.numeric(trainTSLMfor15$mean)
+nrow15 <- data.frame(Store=df15,Date=dates,Weekly_Sales=predict15)
+```
+
+
+```{r}
+train.Store16 <- train_final %>% filter(Store == 16)
+trainStore16.ts <- ts(train.Store16, frequency = 52, start = c(2010,5), end = c(2012,42))
+store16.fit <- tslm(trainStore16.ts[,3] ~ trend + season)
+trainTSLMfor16 <- forecast(store16.fit, h = 53)
+trainTSLMfor16
+df16 <- rep(16, len = 53)
+predict16 <- as.numeric(trainTSLMfor16$mean)
+nrow16 <- data.frame(Store=df16,Date=dates,Weekly_Sales=predict16)
+```
+
+
+```{r}
+train.Store17 <- train_final %>% filter(Store == 17)
+trainStore17.ts <- ts(train.Store17, frequency = 52, start = c(2010,5), end = c(2012,42))
+store17.fit <- tslm(trainStore17.ts[,3] ~ trend + season)
+trainTSLMfor17 <- forecast(store17.fit, h = 53)
+trainTSLMfor17
+df17 <- rep(17, len = 53)
+predict17 <- as.numeric(trainTSLMfor17$mean)
+nrow17 <- data.frame(Store=df17,Date=dates,Weekly_Sales=predict17)
+```
+
+
+```{r}
+train.Store18 <- train_final %>% filter(Store == 18)
+trainStore18.ts <- ts(train.Store18, frequency = 52, start = c(2010,5), end = c(2012,42))
+store18.fit <- tslm(trainStore18.ts[,3] ~ trend + season)
+trainTSLMfor18 <- forecast(store18.fit, h = 53)
+trainTSLMfor18
+df18 <- rep(18, len = 53)
+predict18 <- as.numeric(trainTSLMfor18$mean)
+nrow18 <- data.frame(Store=df18,Date=dates,Weekly_Sales=predict18)
+```
+
+
+```{r}
+train.Store19 <- train_final %>% filter(Store == 19)
+trainStore19.ts <- ts(train.Store19, frequency = 52, start = c(2010,5), end = c(2012,42))
+store19.fit <- tslm(trainStore19.ts[,3] ~ trend + season)
+trainTSLMfor19 <- forecast(store19.fit, h = 53)
+trainTSLMfor19
+df19 <- rep(19, len = 53)
+predict19 <- as.numeric(trainTSLMfor19$mean)
+nrow19 <- data.frame(Store=df19,Date=dates,Weekly_Sales=predict19)
+```
+
+
+```{r}
+train.Store20 <- train_final %>% filter(Store == 20)
+trainStore20.ts <- ts(train.Store20, frequency = 52, start = c(2010,5), end = c(2012,42))
+store20.fit <- tslm(trainStore20.ts[,3] ~ trend + season)
+trainTSLMfor20 <- forecast(store20.fit, h = 53)
+trainTSLMfor20
+df20 <- rep(20, len = 53)
+predict20 <- as.numeric(trainTSLMfor20$mean)
+nrow20 <- data.frame(Store=df20,Date=dates,Weekly_Sales=predict20)
+```
+
+
+```{r}
+train.Store21 <- train_final %>% filter(Store == 21)
+trainStore21.ts <- ts(train.Store21, frequency = 52, start = c(2010,5), end = c(2012,42))
+store21.fit <- tslm(trainStore21.ts[,3] ~ trend + season)
+trainTSLMfor21 <- forecast(store21.fit, h = 53)
+trainTSLMfor21
+df21 <- rep(21, len = 53)
+predict21 <- as.numeric(trainTSLMfor21$mean)
+nrow21 <- data.frame(Store=df21,Date=dates,Weekly_Sales=predict21)
+```
+
+
+```{r}
+train.Store22 <- train_final %>% filter(Store == 22)
+trainStore22.ts <- ts(train.Store22, frequency = 52, start = c(2010,5), end = c(2012,42))
+store22.fit <- tslm(trainStore22.ts[,3] ~ trend + season)
+trainTSLMfor22 <- forecast(store22.fit, h = 53)
+trainTSLMfor22
+df22 <- rep(22, len = 53)
+predict22 <- as.numeric(trainTSLMfor22$mean)
+nrow22 <- data.frame(Store=df22,Date=dates,Weekly_Sales=predict22)
+```
+
+
+```{r}
+train.Store23 <- train_final %>% filter(Store == 23)
+trainStore23.ts <- ts(train.Store20, frequency = 52, start = c(2010,5), end = c(2012,42))
+store23.fit <- tslm(trainStore23.ts[,3] ~ trend + season)
+trainTSLMfor23 <- forecast(store23.fit, h = 53)
+trainTSLMfor23
+df23 <- rep(23, len = 53)
+predict23 <- as.numeric(trainTSLMfor23$mean)
+nrow23 <- data.frame(Store=df23,Date=dates,Weekly_Sales=predict23)
+```
+
+
+```{r}
+train.Store24 <- train_final %>% filter(Store == 24)
+trainStore24.ts <- ts(train.Store24, frequency = 52, start = c(2010,5), end = c(2012,42))
+store24.fit <- tslm(trainStore24.ts[,3] ~ trend + season)
+trainTSLMfor24 <- forecast(store24.fit, h = 53)
+trainTSLMfor24
+df24 <- rep(24, len = 53)
+predict24 <- as.numeric(trainTSLMfor24$mean)
+nrow24 <- data.frame(Store=df24,Date=dates,Weekly_Sales=predict24)
+```
+
+
+```{r}
+train.Store25 <- train_final %>% filter(Store == 25)
+trainStore25.ts <- ts(train.Store25, frequency = 52, start = c(2010,5), end = c(2012,42))
+store25.fit <- tslm(trainStore25.ts[,3] ~ trend + season)
+trainTSLMfor25 <- forecast(store25.fit, h = 53)
+trainTSLMfor25
+df25 <- rep(25, len = 53)
+predict25 <- as.numeric(trainTSLMfor25$mean)
+nrow25 <- data.frame(Store=df25,Date=dates,Weekly_Sales=predict25)
+```
+
+
+```{r}
+train.Store26 <- train_final %>% filter(Store == 26)
+trainStore26.ts <- ts(train.Store26, frequency = 52, start = c(2010,5), end = c(2012,42))
+store26.fit <- tslm(trainStore26.ts[,3] ~ trend + season)
+trainTSLMfor26 <- forecast(store26.fit, h = 53)
+trainTSLMfor26
+df26 <- rep(26, len = 53)
+predict26 <- as.numeric(trainTSLMfor26$mean)
+nrow26 <- data.frame(Store=df26,Date=dates,Weekly_Sales=predict26)
+```
+
+
+```{r}
+train.Store27 <- train_final %>% filter(Store == 27)
+trainStore27.ts <- ts(train.Store27, frequency = 52, start = c(2010,5), end = c(2012,42))
+store27.fit <- tslm(trainStore27.ts[,3] ~ trend + season)
+trainTSLMfor27 <- forecast(store27.fit, h = 53)
+trainTSLMfor27
+df27 <- rep(27, len = 53)
+predict27 <- as.numeric(trainTSLMfor27$mean)
+nrow27 <- data.frame(Store=df27,Date=dates,Weekly_Sales=predict27)
+```
+
+
+```{r}
+train.Store28 <- train_final %>% filter(Store == 28)
+trainStore28.ts <- ts(train.Store28, frequency = 52, start = c(2010,5), end = c(2012,42))
+store28.fit <- tslm(trainStore28.ts[,3] ~ trend + season)
+trainTSLMfor28 <- forecast(store28.fit, h = 53)
+trainTSLMfor28
+df28 <- rep(28, len = 53)
+predict28 <- as.numeric(trainTSLMfor28$mean)
+nrow28 <- data.frame(Store=df28,Date=dates,Weekly_Sales=predict28)
+```
+
+
+```{r}
+train.Store29 <- train_final %>% filter(Store == 29)
+trainStore29.ts <- ts(train.Store29, frequency = 52, start = c(2010,5), end = c(2012,42))
+store29.fit <- tslm(trainStore29.ts[,3] ~ trend + season)
+trainTSLMfor29 <- forecast(store29.fit, h = 53)
+trainTSLMfor29
+df29 <- rep(29, len = 53)
+predict29 <- as.numeric(trainTSLMfor29$mean)
+nrow29 <- data.frame(Store=df29,Date=dates,Weekly_Sales=predict29)
+```
+
+
+```{r}
+train.Store30 <- train_final %>% filter(Store == 30)
+trainStore30.ts <- ts(train.Store30, frequency = 52, start = c(2010,5), end = c(2012,42))
+store30.fit <- tslm(trainStore30.ts[,3] ~ trend + season)
+trainTSLMfor30 <- forecast(store30.fit, h = 53)
+trainTSLMfor30
+df30 <- rep(30, len = 53)
+predict30 <- as.numeric(trainTSLMfor30$mean)
+nrow30 <- data.frame(Store=df30,Date=dates,Weekly_Sales=predict30)
+```
+
+
+```{r}
+train.Store31 <- train_final %>% filter(Store == 31)
+trainStore31.ts <- ts(train.Store31, frequency = 52, start = c(2010,5), end = c(2012,42))
+store31.fit <- tslm(trainStore31.ts[,3] ~ trend + season)
+trainTSLMfor31 <- forecast(store31.fit, h = 53)
+trainTSLMfor31
+df31 <- rep(31, len = 53)
+predict31 <- as.numeric(trainTSLMfor31$mean)
+nrow31 <- data.frame(Store=df31,Date=dates,Weekly_Sales=predict31)
+```
+
+
+```{r}
+train.Store32 <- train_final %>% filter(Store == 32)
+trainStore32.ts <- ts(train.Store32, frequency = 52, start = c(2010,5), end = c(2012,42))
+store32.fit <- tslm(trainStore32.ts[,3] ~ trend + season)
+trainTSLMfor32 <- forecast(store32.fit, h = 53)
+trainTSLMfor32
+df32 <- rep(32, len = 53)
+predict32 <- as.numeric(trainTSLMfor32$mean)
+nrow32 <- data.frame(Store=df32,Date=dates,Weekly_Sales=predict32)
+```
+
+
+```{r}
+train.Store33 <- train_final %>% filter(Store == 33)
+trainStore33.ts <- ts(train.Store33, frequency = 52, start = c(2010,5), end = c(2012,42))
+store33.fit <- tslm(trainStore33.ts[,3] ~ trend + season)
+trainTSLMfor33 <- forecast(store33.fit, h = 53)
+trainTSLMfor33
+df33 <- rep(33, len = 53)
+predict33 <- as.numeric(trainTSLMfor33$mean)
+nrow33 <- data.frame(Store=df33,Date=dates,Weekly_Sales=predict33)
+```
+
+
+```{r}
+train.Store34 <- train_final %>% filter(Store == 34)
+trainStore34.ts <- ts(train.Store34, frequency = 52, start = c(2010,5), end = c(2012,42))
+store34.fit <- tslm(trainStore34.ts[,3] ~ trend + season)
+trainTSLMfor34 <- forecast(store34.fit, h = 53)
+trainTSLMfor34
+df34 <- rep(34, len = 53)
+predict34 <- as.numeric(trainTSLMfor34$mean)
+nrow34 <- data.frame(Store=df34,Date=dates,Weekly_Sales=predict34)
+```
+
+
+```{r}
+train.Store35 <- train_final %>% filter(Store == 35)
+trainStore35.ts <- ts(train.Store35, frequency = 52, start = c(2010,5), end = c(2012,42))
+store35.fit <- tslm(trainStore35.ts[,3] ~ trend + season)
+trainTSLMfor35 <- forecast(store35.fit, h = 53)
+trainTSLMfor35
+df35 <- rep(35, len = 53)
+predict35 <- as.numeric(trainTSLMfor35$mean)
+nrow35 <- data.frame(Store=df35,Date=dates,Weekly_Sales=predict35)
+```
+
+
+```{r}
+train.Store36 <- train_final %>% filter(Store == 36)
+trainStore36.ts <- ts(train.Store36, frequency = 52, start = c(2010,5), end = c(2012,42))
+store36.fit <- tslm(trainStore36.ts[,3] ~ trend + season)
+trainTSLMfor36 <- forecast(store36.fit, h = 53)
+trainTSLMfor36
+df36 <- rep(36, len = 53)
+predict36 <- as.numeric(trainTSLMfor36$mean)
+nrow36 <- data.frame(Store=df36,Date=dates,Weekly_Sales=predict36)
+```
+
+
+```{r}
+train.Store37 <- train_final %>% filter(Store == 37)
+trainStore37.ts <- ts(train.Store37, frequency = 52, start = c(2010,5), end = c(2012,42))
+store37.fit <- tslm(trainStore37.ts[,3] ~ trend + season)
+trainTSLMfor37 <- forecast(store37.fit, h = 53)
+trainTSLMfor37
+df37 <- rep(37, len = 53)
+predict37 <- as.numeric(trainTSLMfor37$mean)
+nrow37 <- data.frame(Store=df37,Date=dates,Weekly_Sales=predict37)
+```
+
+
+```{r}
+train.Store38 <- train_final %>% filter(Store == 38)
+trainStore38.ts <- ts(train.Store38, frequency = 52, start = c(2010,5), end = c(2012,42))
+store38.fit <- tslm(trainStore38.ts[,3] ~ trend + season)
+trainTSLMfor38 <- forecast(store38.fit, h = 53)
+trainTSLMfor38
+df38 <- rep(38, len = 53)
+predict38 <- as.numeric(trainTSLMfor38$mean)
+nrow38 <- data.frame(Store=df38,Date=dates,Weekly_Sales=predict38)
+```
+
+
+```{r}
+train.Store39 <- train_final %>% filter(Store == 39)
+trainStore39.ts <- ts(train.Store39, frequency = 52, start = c(2010,5), end = c(2012,42))
+store39.fit <- tslm(trainStore39.ts[,3] ~ trend + season)
+trainTSLMfor39 <- forecast(store39.fit, h = 53)
+trainTSLMfor39
+df39 <- rep(39, len = 53)
+predict39 <- as.numeric(trainTSLMfor39$mean)
+nrow39 <- data.frame(Store=df39,Date=dates,Weekly_Sales=predict39)
+```
+
+
+```{r}
+train.Store40 <- train_final %>% filter(Store == 40)
+trainStore40.ts <- ts(train.Store40, frequency = 52, start = c(2010,5), end = c(2012,42))
+store40.fit <- tslm(trainStore40.ts[,3] ~ trend + season)
+trainTSLMfor40 <- forecast(store40.fit, h = 53)
+trainTSLMfor40
+df40 <- rep(40, len = 53)
+predict40 <- as.numeric(trainTSLMfor40$mean)
+nrow40 <- data.frame(Store=df40,Date=dates,Weekly_Sales=predict40)
+```
+
+
+```{r}
+train.Store41 <- train_final %>% filter(Store == 41)
+trainStore41.ts <- ts(train.Store41, frequency = 52, start = c(2010,5), end = c(2012,42))
+store41.fit <- tslm(trainStore41.ts[,3] ~ trend + season)
+trainTSLMfor41 <- forecast(store41.fit, h = 53)
+trainTSLMfor41
+df41 <- rep(41, len = 53)
+predict41 <- as.numeric(trainTSLMfor41$mean)
+nrow41 <- data.frame(Store=df41,Date=dates,Weekly_Sales=predict41)
+```
+
+
+```{r}
+train.Store42 <- train_final %>% filter(Store == 42)
+trainStore42.ts <- ts(train.Store42, frequency = 52, start = c(2010,5), end = c(2012,42))
+store42.fit <- tslm(trainStore42.ts[,3] ~ trend + season)
+trainTSLMfor42 <- forecast(store42.fit, h = 53)
+trainTSLMfor42
+df42 <- rep(42, len = 53)
+predict42 <- as.numeric(trainTSLMfor42$mean)
+nrow42 <- data.frame(Store=df42,Date=dates,Weekly_Sales=predict42)
+```
+
+
+```{r}
+train.Store43 <- train_final %>% filter(Store == 43)
+trainStore43.ts <- ts(train.Store43, frequency = 52, start = c(2010,5), end = c(2012,42))
+store43.fit <- tslm(trainStore43.ts[,3] ~ trend + season)
+trainTSLMfor43 <- forecast(store43.fit, h = 53)
+trainTSLMfor43
+df43 <- rep(43, len = 53)
+predict43 <- as.numeric(trainTSLMfor43$mean)
+nrow43 <- data.frame(Store=df43,Date=dates,Weekly_Sales=predict43)
+```
+
+
+```{r}
+train.Store44 <- train_final %>% filter(Store == 44)
+trainStore44.ts <- ts(train.Store44, frequency = 52, start = c(2010,5), end = c(2012,42))
+store44.fit <- tslm(trainStore44.ts[,3] ~ trend + season)
+trainTSLMfor44 <- forecast(store44.fit, h = 53)
+trainTSLMfor44
+df44 <- rep(44, len = 53)
+predict44 <- as.numeric(trainTSLMfor44$mean)
+nrow44 <- data.frame(Store=df44,Date=dates,Weekly_Sales=predict44)
+```
+
+
+```{r}
+train.Store45 <- train_final %>% filter(Store == 45)
+trainStore45.ts <- ts(train.Store45, frequency = 52, start = c(2010,5), end = c(2012,42))
+store45.fit <- tslm(trainStore45.ts[,3] ~ trend + season)
+trainTSLMfor45 <- forecast(store45.fit, h = 53)
+df45 <- rep(45, len = 53)
+predict45 <- as.numeric(trainTSLMfor45$mean)
+nrow45 <- data.frame(Store=df45,Date=dates,Weekly_Sales=predict45)
+
+```
+
+### WRITING THE OUTPUT INTO A CSV FILE
+
+```{r}
+output_format <- rbind(nrow1,nrow2,nrow3,nrow4,nrow5,nrow6,
+                nrow7,nrow8,nrow9,nrow10,nrow11,nrow12,nrow13,nrow14,nrow15,nrow16,nrow17,nrow18,
+                       nrow19,nrow20,nrow21,nrow22,nrow23,nrow24,nrow25,nrow26,nrow27,nrow28,nrow29,nrow30,
+                       nrow31,nrow32,nrow33,nrow34,nrow35,nrow36,nrow37,nrow38,nrow39,nrow40,nrow41,nrow42,nrow43,nrow44,nrow45)
+
+write.csv(output_format, file = "output.csv")
+predictedSales <- output_format
+```
+
+
+```{r}
+plot(predictedSales)
+p1 <- ggplot() + 
+    geom_col(aes(y = Weekly_Sales, x = Store), data = predictedSales)
+p1
+```
+
+### Summary of predicted Sales by Store Type
+
+```{r}
+mean(output_format$Weekly_Sales)
+```
+
+# __CONCLUSION__
+Store number 4 is predicted to have the highest amount of sales (3,808,117) on 2012-12-28 and store number 36 is predicted to have the least amount of sales (1,69,337.6 ) on 2013-11-01 and the average weekly sales of all stores from 2012-11-02 to 2013-11-01 is predicted to be 1,089,006.
