@@ -5,3 +5,5 @@ Developed as a part of a college project
 
 ### Dataset used : 
 https://www.kaggle.com/c/walmart-recruiting-store-sales-forecasting/data
+
+The dataset contains stores.csv, train.csv and features.csv
